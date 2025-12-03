@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import connectDB from './config/database.js';
 import authRoutes from './routes/authRoutes.js';
 import projectRoutes from './routes/projectRoutes.js';
+import aiRoutes from './routes/aiRoutes.js';
 import initializeSocket from './utils/socketHandler.js';
 
 dotenv.config();
@@ -40,6 +41,7 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/ai', aiRoutes);
 
 // Initialize WebSocket
 initializeSocket(io);
