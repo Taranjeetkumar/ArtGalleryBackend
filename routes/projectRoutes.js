@@ -11,7 +11,7 @@ import {
   addCollaborator,
   getMyProjects
 } from '../controllers/projectController.js';
-import { protect } from '../middleware/auth.js';
+import { protect, optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -22,7 +22,7 @@ router.route('/')
 router.get('/my-projects', protect, getMyProjects);
 
 router.route('/:id')
-  .get(protect, getProject)
+  .get(optionalAuth, getProject)
   .put(protect, updateProject)
   .delete(protect, deleteProject);
 

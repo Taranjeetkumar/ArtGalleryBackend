@@ -1,7 +1,9 @@
 import Session from '../models/Session.js';
+import Project from '../models/Project.js';
 
 const connectedUsers = new Map(); // socketId -> { userId, projectId, username, color }
 const projectRooms = new Map(); // projectId -> Set of socketIds
+const projectStates = new Map(); // projectId -> { canvasData, layers, version }
 
 // Generate random color for user cursor
 const generateUserColor = () => {
@@ -27,6 +29,17 @@ export const initializeSocket = (io) => {
 
         if (!projectRooms.has(projectId)) {
           projectRooms.set(projectId, new Set());
+
+          // Load project state when first user joins
+          const project = await Project.findById(projectId);
+          if (project && project.versions && project.versions.length > 0) {
+            const lastVersion = project.versions[project.versions.length - 1];
+            projectStates.set(projectId, {
+              canvasData: lastVersion.canvasData,
+              layers: project.layers,
+              version: project.currentVersion
+            });
+          }
         }
         projectRooms.get(projectId).add(socket.id);
 
@@ -63,6 +76,12 @@ export const initializeSocket = (io) => {
           .map(sid => connectedUsers.get(sid))
           .filter(Boolean);
 
+        // Send current project state to the joining user
+        const currentState = projectStates.get(projectId);
+        if (currentState) {
+          socket.emit('sync-state', currentState);
+        }
+
         // Notify all users in the room
         io.to(projectId).emit('user-joined', {
           socketId: socket.id,
@@ -86,6 +105,18 @@ export const initializeSocket = (io) => {
       });
     });
 
+    // Handle canvas state updates (for synchronization)
+    socket.on('canvas-update', async ({ projectId, canvasData, layers }) => {
+      // Update the project state
+      if (projectStates.has(projectId)) {
+        const state = projectStates.get(projectId);
+        state.canvasData = canvasData;
+        state.layers = layers;
+      } else {
+        projectStates.set(projectId, { canvasData, layers, version: 1 });
+      }
+    });
+
     // Handle cursor movement
     socket.on('cursor-move', ({ projectId, x, y }) => {
       const user = connectedUsers.get(socket.id);
@@ -103,6 +134,11 @@ export const initializeSocket = (io) => {
     // Handle layer changes
     socket.on('layer-change', ({ projectId, layers }) => {
       socket.to(projectId).emit('layer-update', { layers });
+
+      // Update project state
+      if (projectStates.has(projectId)) {
+        projectStates.get(projectId).layers = layers;
+      }
     });
 
     // Handle undo/redo
@@ -158,6 +194,8 @@ const handleUserLeave = async (socket, projectId, io) => {
 
         if (projectRooms.get(projectId).size === 0) {
           projectRooms.delete(projectId);
+          // Clean up project state when last user leaves
+          projectStates.delete(projectId);
 
           // End session if no more users
           await Session.findOneAndUpdate(

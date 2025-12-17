@@ -32,7 +32,7 @@ export const createProject = async (req, res) => {
 
 export const getProjects = async (req, res) => {
   try {
-    const { page = 1, limit = 12, sort = '-createdAt', search, tags } = req.query;
+    const { page = 1, limit = 12, sort = '-createdAt', search, tags, onlyAuction } = req.query;
 
     const query = { visibility: 'public' };
 
@@ -42,6 +42,11 @@ export const getProjects = async (req, res) => {
 
     if (tags) {
       query.tags = { $in: tags.split(',') };
+    }
+
+    // Filter for auction items
+    if (onlyAuction === 'true') {
+      query['auction.isActive'] = true;
     }
 
     const projects = await Project.find(query)
@@ -75,9 +80,14 @@ export const getProject = async (req, res) => {
 
     // Check access permissions
     if (project.visibility === 'private') {
-      const isOwner = project.owner._id.toString() === req.user?._id.toString();
+      // If not authenticated, deny access to private projects
+      if (!req.user) {
+        return res.status(403).json({ message: 'Access denied. Please login to view this project.' });
+      }
+
+      const isOwner = project.owner._id.toString() === req.user._id.toString();
       const isCollaborator = project.collaborators.some(
-        c => c.user._id.toString() === req.user?._id.toString()
+        c => c.user._id.toString() === req.user._id.toString()
       );
 
       if (!isOwner && !isCollaborator) {
@@ -85,8 +95,26 @@ export const getProject = async (req, res) => {
       }
     }
 
-    // Increment view count
-    project.viewCount += 1;
+    // Increment view count (only once per user per session)
+    // For anonymous users, always increment
+    // For logged-in users, track views to prevent duplicates
+    if (!req.user) {
+      project.viewCount += 1;
+    } else {
+      // Check if user has already viewed this project
+      const hasViewed = project.views?.some(
+        v => v.user?.toString() === req.user._id.toString()
+      );
+
+      if (!hasViewed) {
+        if (!project.views) {
+          project.views = [];
+        }
+        project.views.push({ user: req.user._id, viewedAt: new Date() });
+        project.viewCount += 1;
+      }
+    }
+
     await project.save();
 
     res.json(project);
@@ -231,19 +259,31 @@ export const voteProject = async (req, res) => {
       return res.status(404).json({ message: 'Project not found' });
     }
 
-    const existingVote = project.votes.find(
+    const existingVoteIndex = project.votes.findIndex(
       v => v.user.toString() === req.user._id.toString()
     );
 
-    if (existingVote) {
+    if (existingVoteIndex !== -1) {
+      const existingVote = project.votes[existingVoteIndex];
+
+      // If user is voting the same way again, ignore it (no duplicate votes)
+      if (existingVote.value === value) {
+        return res.json({
+          voteCount: project.voteCount,
+          message: 'You have already voted this way'
+        });
+      }
+
       // Remove previous vote count
       project.voteCount -= existingVote.value;
-      // Update vote
-      existingVote.value = value;
+      // Update vote value
+      project.votes[existingVoteIndex].value = value;
     } else {
+      // New vote
       project.votes.push({ user: req.user._id, value });
     }
 
+    // Add new vote count
     project.voteCount += value;
     await project.save();
 
