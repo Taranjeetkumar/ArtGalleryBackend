@@ -9,6 +9,10 @@ import {
   forkProject,
   voteProject,
   addCollaborator,
+  removeCollaborator,
+  updateCollaboratorRole,
+  generateShareLink,
+  joinViaShareLink,
   getMyProjects
 } from '../controllers/projectController.js';
 import { protect, optionalAuth } from '../middleware/auth.js';
@@ -29,6 +33,12 @@ router.route('/:id')
 router.post('/:id/versions', protect, createVersion);
 router.post('/:id/fork', protect, forkProject);
 router.post('/:id/vote', protect, voteProject);
+
+// Collaboration routes
 router.post('/:id/collaborators', protect, addCollaborator);
+router.delete('/:id/collaborators', protect, removeCollaborator);
+router.put('/:id/collaborators/role', protect, updateCollaboratorRole);
+router.post('/:id/share-link', protect, generateShareLink);
+router.post('/:id/join/:token', protect, joinViaShareLink);
 
 export default router;

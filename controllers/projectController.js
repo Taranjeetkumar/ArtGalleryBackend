@@ -36,8 +36,14 @@ export const getProjects = async (req, res) => {
 
     const query = { visibility: 'public' };
 
-    if (search) {
-      query.$text = { $search: search };
+    // Search with case-insensitive regex for partial matches
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i'); // 'i' flag for case-insensitive
+      query.$or = [
+        { title: searchRegex },
+        { description: searchRegex },
+        { tags: searchRegex }
+      ];
     }
 
     if (tags) {
@@ -213,7 +219,9 @@ export const createVersion = async (req, res) => {
 
 export const forkProject = async (req, res) => {
   try {
-    const originalProject = await Project.findById(req.params.id);
+    const originalProject = await Project.findById(req.params.id)
+      .populate('owner', 'username avatar')
+      .populate('forkedFrom', 'title owner');
 
     if (!originalProject) {
       return res.status(404).json({ message: 'Project not found' });
@@ -223,18 +231,35 @@ export const forkProject = async (req, res) => {
       return res.status(403).json({ message: 'Cannot fork private project' });
     }
 
+    // Get the latest version for forking
+    const latestVersion = originalProject.versions[originalProject.versions.length - 1];
+
+    // Build fork lineage
+    const forkLineage = originalProject.forkLineage || [];
+    forkLineage.push({
+      projectId: originalProject._id,
+      title: originalProject.title,
+      owner: originalProject.owner,
+      forkedAt: new Date()
+    });
+
     const forkedProject = await Project.create({
       title: `${originalProject.title} (Fork)`,
-      description: originalProject.description,
+      description: `Forked from "${originalProject.title}" by ${originalProject.owner.username}\n\n${originalProject.description}`,
       owner: req.user._id,
       canvas: originalProject.canvas,
       layers: originalProject.layers,
+      tags: originalProject.tags,
       forkedFrom: originalProject._id,
+      forkLineage,
+      forkGeneration: (originalProject.forkGeneration || 0) + 1,
       visibility: 'private',
+      thumbnail: latestVersion?.thumbnail || originalProject.thumbnail,
       versions: [{
         versionNumber: 1,
-        canvasData: originalProject.versions[originalProject.versions.length - 1]?.canvasData || '',
+        canvasData: latestVersion?.canvasData || '',
         layers: originalProject.layers,
+        thumbnail: latestVersion?.thumbnail || originalProject.thumbnail,
         message: `Forked from ${originalProject.title}`,
         author: req.user._id
       }]
@@ -242,7 +267,11 @@ export const forkProject = async (req, res) => {
 
     // Add to original project's forks
     originalProject.forks.push(forkedProject._id);
+    originalProject.forkCount = (originalProject.forkCount || 0) + 1;
     await originalProject.save();
+
+    // Populate the forked project
+    await forkedProject.populate('owner', 'username avatar');
 
     res.status(201).json(forkedProject);
   } catch (error) {
@@ -318,6 +347,151 @@ export const addCollaborator = async (req, res) => {
     await project.save();
 
     res.json(project);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const removeCollaborator = async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    if (project.owner.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Only owner can remove collaborators' });
+    }
+
+    project.collaborators = project.collaborators.filter(
+      c => c.user.toString() !== userId
+    );
+    await project.save();
+
+    res.json(project);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const updateCollaboratorRole = async (req, res) => {
+  try {
+    const { userId, role } = req.body;
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    if (project.owner.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Only owner can update collaborator roles' });
+    }
+
+    const collaborator = project.collaborators.find(
+      c => c.user.toString() === userId
+    );
+
+    if (!collaborator) {
+      return res.status(404).json({ message: 'Collaborator not found' });
+    }
+
+    collaborator.role = role;
+    await project.save();
+
+    res.json(project);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const generateShareLink = async (req, res) => {
+  try {
+    const { role, expiresIn } = req.body; // role: 'editor' or 'viewer', expiresIn: hours
+    const project = await Project.findById(req.params.id);
+
+    if (!project) {
+      return res.status(404).json({ message: 'Project not found' });
+    }
+
+    if (project.owner.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Only owner can generate share links' });
+    }
+
+    // Generate a unique token
+    const crypto = await import('crypto');
+    const token = crypto.randomBytes(32).toString('hex');
+
+    const expiresAt = expiresIn
+      ? new Date(Date.now() + expiresIn * 60 * 60 * 1000)
+      : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // Default 7 days
+
+    if (!project.shareLinks) {
+      project.shareLinks = [];
+    }
+
+    project.shareLinks.push({
+      token,
+      role,
+      expiresAt,
+      createdBy: req.user._id
+    });
+
+    await project.save();
+
+    const shareUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/project/${project._id}/join/${token}`;
+
+    res.json({ token, shareUrl, expiresAt });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const joinViaShareLink = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const project = await Project.findOne({
+      'shareLinks.token': token
+    });
+
+    if (!project) {
+      return res.status(404).json({ message: 'Invalid share link' });
+    }
+
+    const shareLink = project.shareLinks.find(link => link.token === token);
+
+    if (!shareLink) {
+      return res.status(404).json({ message: 'Invalid share link' });
+    }
+
+    // Check if link has expired
+    if (new Date() > new Date(shareLink.expiresAt)) {
+      return res.status(410).json({ message: 'Share link has expired' });
+    }
+
+    // Check if user is already a collaborator or owner
+    if (project.owner.toString() === req.user._id.toString()) {
+      return res.json({ message: 'You are already the owner', project });
+    }
+
+    const alreadyCollaborator = project.collaborators.some(
+      c => c.user.toString() === req.user._id.toString()
+    );
+
+    if (alreadyCollaborator) {
+      return res.json({ message: 'You are already a collaborator', project });
+    }
+
+    // Add user as collaborator
+    project.collaborators.push({
+      user: req.user._id,
+      role: shareLink.role
+    });
+
+    await project.save();
+
+    res.json({ message: 'Successfully joined project', project });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

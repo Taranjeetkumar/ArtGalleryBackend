@@ -58,6 +58,30 @@ const projectSchema = new mongoose.Schema({
       default: Date.now
     }
   }],
+  shareLinks: [{
+    token: {
+      type: String,
+      required: true,
+      unique: true
+    },
+    role: {
+      type: String,
+      enum: ['editor', 'viewer'],
+      default: 'viewer'
+    },
+    expiresAt: {
+      type: Date,
+      required: true
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   currentVersion: {
     type: Number,
     default: 1
@@ -93,6 +117,26 @@ const projectSchema = new mongoose.Schema({
   forks: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project'
+  }],
+  forkCount: {
+    type: Number,
+    default: 0
+  },
+  forkGeneration: {
+    type: Number,
+    default: 0
+  },
+  forkLineage: [{
+    projectId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Project'
+    },
+    title: String,
+    owner: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    forkedAt: Date
   }],
   tags: [String],
   visibility: {
