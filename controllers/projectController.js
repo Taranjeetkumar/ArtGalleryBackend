@@ -60,6 +60,18 @@ export const getProjects = async (req, res) => {
 
       const auctionProjectIds = activeAuctions.map(auction => auction.project);
       query._id = { $in: auctionProjectIds };
+    } else {
+      // Exclude items that are currently in active auction from public gallery
+      const activeAuctions = await Auction.find({
+        status: 'active',
+        endDate: { $gt: new Date() }
+      }).select('project');
+
+      const auctionProjectIds = activeAuctions.map(auction => auction.project);
+
+      if (auctionProjectIds.length > 0) {
+        query._id = { $nin: auctionProjectIds };
+      }
     }
 
     const projects = await Project.find(query)
@@ -189,6 +201,11 @@ export const updateProject = async (req, res) => {
 
     if (!project) {
       return res.status(404).json({ message: 'Project not found' });
+    }
+
+    // Check if project has been sold
+    if (project.soldTo) {
+      return res.status(403).json({ message: 'Cannot edit sold items. Please fork this project to make changes.' });
     }
 
     // Check if user has edit permission
@@ -553,9 +570,31 @@ export const getMyProjects = async (req, res) => {
   try {
     const projects = await Project.find({ owner: req.user._id })
       .populate('collaborators.user', 'username avatar')
+      .populate('soldTo', 'username avatar')
       .sort('-updatedAt');
 
-    res.json(projects);
+    // Populate auction status for each project
+    const projectsWithAuction = await Promise.all(
+      projects.map(async (project) => {
+        const auction = await Auction.findOne({
+          project: project._id
+        }).sort('-createdAt'); // Get the latest auction
+
+        return {
+          ...project.toObject(),
+          auction: auction ? {
+            isActive: auction.status === 'active',
+            startPrice: auction.startingPrice,
+            currentPrice: auction.currentPrice,
+            endDate: auction.endDate,
+            status: auction.status,
+            bids: auction.bids
+          } : null
+        };
+      })
+    );
+
+    res.json(projectsWithAuction);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

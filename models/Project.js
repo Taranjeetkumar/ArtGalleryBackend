@@ -188,6 +188,19 @@ const projectSchema = new mongoose.Schema({
       amount: Number,
       timestamp: Date
     }]
+  },
+  soldTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  soldPrice: {
+    type: Number,
+    default: null
+  },
+  soldAt: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true

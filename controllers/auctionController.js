@@ -98,6 +98,15 @@ export const getAuctionById = async (req, res) => {
         if (highestBid >= auction.reservePrice) {
           auction.status = 'sold';
           auction.winner = auction.bids[auction.bids.length - 1].bidder;
+
+          // Update the project to mark it as sold
+          const project = await Project.findById(auction.project._id);
+          if (project) {
+            project.soldTo = auction.winner;
+            project.soldPrice = auction.currentPrice;
+            project.soldAt = new Date();
+            await project.save();
+          }
         } else {
           auction.status = 'ended';
         }
@@ -141,8 +150,20 @@ export const placeBid = async (req, res) => {
     }
 
     try {
+      const previousStatus = auction.status;
       auction.placeBid(req.user._id, amount);
       await auction.save();
+
+      // If auction became sold (buy-now price was met), update the project
+      if (previousStatus === 'active' && auction.status === 'sold') {
+        const project = await Project.findById(auction.project);
+        if (project) {
+          project.soldTo = auction.winner;
+          project.soldPrice = auction.currentPrice;
+          project.soldAt = new Date();
+          await project.save();
+        }
+      }
 
       // Populate the auction with user details
       await auction.populate('bids.bidder', 'username');
