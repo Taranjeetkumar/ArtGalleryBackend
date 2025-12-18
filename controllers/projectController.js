@@ -1,5 +1,6 @@
 import Project from '../models/Project.js';
 import User from '../models/User.js';
+import Auction from '../models/Auction.js';
 
 export const createProject = async (req, res) => {
   try {
@@ -50,9 +51,15 @@ export const getProjects = async (req, res) => {
       query.tags = { $in: tags.split(',') };
     }
 
-    // Filter for auction items
+    // Filter for auction items - query the Auction table
     if (onlyAuction === 'true') {
-      query['auction.isActive'] = true;
+      const activeAuctions = await Auction.find({
+        status: 'active',
+        endDate: { $gt: new Date() } // Only auctions that haven't ended yet
+      }).select('project');
+
+      const auctionProjectIds = activeAuctions.map(auction => auction.project);
+      query._id = { $in: auctionProjectIds };
     }
 
     const projects = await Project.find(query)
@@ -61,10 +68,55 @@ export const getProjects = async (req, res) => {
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
+    // If filtering by auction, populate auction data
+    let projectsWithAuction = projects;
+    if (onlyAuction === 'true') {
+      projectsWithAuction = await Promise.all(
+        projects.map(async (project) => {
+          const auction = await Auction.findOne({
+            project: project._id,
+            status: 'active'
+          });
+
+          return {
+            ...project.toObject(),
+            auction: auction ? {
+              isActive: true,
+              startPrice: auction.startingPrice,
+              currentPrice: auction.currentPrice,
+              endDate: auction.endDate,
+              bids: auction.bids
+            } : null
+          };
+        })
+      );
+    } else {
+      // For non-auction filter, still check if each project has an active auction
+      projectsWithAuction = await Promise.all(
+        projects.map(async (project) => {
+          const auction = await Auction.findOne({
+            project: project._id,
+            status: 'active'
+          });
+
+          return {
+            ...project.toObject(),
+            auction: auction ? {
+              isActive: true,
+              startPrice: auction.startingPrice,
+              currentPrice: auction.currentPrice,
+              endDate: auction.endDate,
+              bids: auction.bids
+            } : null
+          };
+        })
+      );
+    }
+
     const count = await Project.countDocuments(query);
 
     res.json({
-      projects,
+      projects: projectsWithAuction,
       totalPages: Math.ceil(count / limit),
       currentPage: page
     });

@@ -61,8 +61,7 @@ const projectSchema = new mongoose.Schema({
   shareLinks: [{
     token: {
       type: String,
-      required: true,
-      unique: true
+      required: true
     },
     role: {
       type: String,

@@ -49,14 +49,20 @@ export const getActiveAuctions = async (req, res) => {
     const limit = parseInt(req.query.limit) || 12;
     const skip = (page - 1) * limit;
 
-    const auctions = await Auction.find({ status: 'active' })
+    const auctions = await Auction.find({
+      status: 'active',
+      endDate: { $gt: new Date() }
+    })
       .populate('seller', 'username email')
       .populate('project', 'title thumbnail')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
-    const total = await Auction.countDocuments({ status: 'active' });
+    const total = await Auction.countDocuments({
+      status: 'active',
+      endDate: { $gt: new Date() }
+    });
 
     res.json({
       auctions,
@@ -85,6 +91,24 @@ export const getAuctionById = async (req, res) => {
       return res.status(404).json({ message: 'Auction not found' });
     }
 
+    const now = new Date();
+    if (auction.status === 'active' && now > auction.endDate) {
+      if (auction.bids.length > 0) {
+        const highestBid = auction.currentPrice;
+        if (highestBid >= auction.reservePrice) {
+          auction.status = 'sold';
+          auction.winner = auction.bids[auction.bids.length - 1].bidder;
+        } else {
+          auction.status = 'ended';
+        }
+      } else {
+        auction.status = 'ended';
+      }
+      await auction.save();
+      // Re-populate after save
+      await auction.populate('winner', 'username');
+    }
+
     // Increment view count
     auction.views += 1;
     await auction.save();
@@ -104,6 +128,11 @@ export const placeBid = async (req, res) => {
 
     if (!auction) {
       return res.status(404).json({ message: 'Auction not found' });
+    }
+
+    const now = new Date();
+    if (now > auction.endDate) {
+      return res.status(400).json({ message: 'Auction has ended' });
     }
 
     // Check if user is the seller
